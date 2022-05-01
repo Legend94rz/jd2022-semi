@@ -1,0 +1,12 @@
+__pycache__/
+*.ipynb
+*.pt
+*.txt
+*.json
+.ipynb_checkpoints/
+trexpark/
+*.pkl
+*.csv
+events*
+*.zip
+*.mdb
