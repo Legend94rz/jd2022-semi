@@ -201,3 +201,10 @@ if __name__ == "__main__":
                 'gt_title': x['title'],
                 'meta': get_meta(x)
             }))
+    db = env.open_db(b'unmatched')
+    with env.begin(db=db, write=True) as txn:
+        for i, x in enumerate(tqdm(unmatched)):
+            txn.put(str(i).encode(), pkl.dumps({
+                'img_name': x['img_name'],
+                'title': x['title'],
+            }))

@@ -146,44 +146,49 @@ def neg_aug(obj, all_prop, ufset, table: pd.DataFrame, grouped_df: pd.DataFrame)
 
 
 def train_pairwise(fd):
+    EPOCHS = 9
     feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
+    train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
+    unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'unmatched')
+    #train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
+    #unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')
 
-    train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
-    val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
     samples = []
     for x in tqdm(train_obj):
         samples.extend(make_sample(x, prop, ufset))
         samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
         samples.extend(pos_aug(x, ufset))
-    for x in tqdm(LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')):
+    for x in tqdm(unmatched_train):
         samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
     print(sum([x['match'] for x in samples]), len(samples))
     
-    val_samples = []
-    unique = set()
-    for x in tqdm(val_obj):
-        if x['img_name'] not in unique:
-            x = {'img_name': x['img_name'], 'key_attr': x['gt_key_attr'], 'match': {**{'图文': 1}, **{k:1 for k in x['gt_key_attr']}}, 'title': x['gt_title'], 'gt_key_attr': x['gt_key_attr'].copy()}
-            val_samples.extend(make_sample(x, prop, ufset))
-            val_samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
-            val_samples.extend(pos_aug(x, ufset))
-            unique.add(x['img_name'])
-    for x in tqdm(LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val')):
-        val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
-    print(sum([x['match'] for x in val_samples]), len(val_samples))
+    #val_samples = []
+    #unique = set()
+    #val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
+    #unmatched_val = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val')
+    #for x in tqdm(val_obj):
+    #    if x['img_name'] not in unique:
+    #        x = {'img_name': x['img_name'], 'key_attr': x['gt_key_attr'], 'match': {**{'图文': 1}, **{k:1 for k in x['gt_key_attr']}}, 'title': x['gt_title'], 'gt_key_attr': x['gt_key_attr'].copy()}
+    #        val_samples.extend(make_sample(x, prop, ufset))
+    #        val_samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
+    #        val_samples.extend(pos_aug(x, ufset))
+    #        unique.add(x['img_name'])
+    #for x in tqdm(unmatched_val):
+    #    val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
+    #print(sum([x['match'] for x in val_samples]), len(val_samples))
 
     m = Learner(TitleImg(), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
-    _, val_log = m.fit(PairwiseDataset(samples, feature_db), 1000, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
-        validation_set=PairwiseDataset(val_samples, feature_db),
+    _, val_log = m.fit(PairwiseDataset(samples, feature_db), EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
+        #validation_set=PairwiseDataset(val_samples, feature_db),
         callbacks=[
             # todo: 改下参数swa_start=3, anneal_epochs=5
-            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-{fd}.pt'), 5), 
-            EarlyStopping('val_loss', 4, 'min'), 
+            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 3, anneal_epochs=5), 
+            #EarlyStopping('val_loss', 4, 'min'), 
             #ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
         ], 
         device=f'cuda:{fd}', collate_fn=PairwiseDataset.collate_fn, num_workers=8, shuffle=True
     )
-    print(val_log['val_acc'].max())
+    #print(val_log['val_acc'].max())
 
 
 if __name__ == "__main__":
@@ -202,12 +207,12 @@ if __name__ == "__main__":
     table = pd.concat([pd.DataFrame(candidate_title, columns=['title']), pd.DataFrame.from_records(candidate_attr)], axis=1)
     grouped_df = table.groupby(list(prop), dropna=False)['title'].agg(set)
 
-    #train_pairwise(0)
-    procs = []
-    for i in range(1, 5):
-        p = mp.Process(target=train_pairwise, args=(i, ))
-        p.start()
-        procs.append(p)
-    for p in procs:
-        p.join()
-        p.close()
+    train_pairwise(0)
+    #procs = []
+    #for i in range(5):
+    #    p = mp.Process(target=train_pairwise, args=(i, ))
+    #    p.start()
+    #    procs.append(p)
+    #for p in procs:
+    #    p.join()
+    #    p.close()

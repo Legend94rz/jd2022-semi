@@ -60,6 +60,7 @@ def parse_args():
     return parser.parse_args()
 
 
+# visualbert-swa
 if __name__ == "__main__":
     args = parse_args()
     prop = get_eq_attr()
