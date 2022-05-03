@@ -29,10 +29,12 @@ colors = {
     '白色': set('白色|米色|银色|米白色'.split('|')), 
     '灰色': set('灰色|浅灰色'.split('|'))
 }
-# {'裤型', '裤长', '裤门襟'}
-# {'版型', '穿着方式', 袖长', '衣长', '领型', '裙长'}
-# {'闭合方式'， '鞋帮高度'}
-# {'类别'}
+attr_type_map = {
+    '裤型': 'A', '裤长': 'A', '裤门襟': 'A',
+    '版型': 'B', '穿着方式': 'B', '袖长': 'B', '衣长': 'B', '领型': 'B', '裙长': 'B',
+    '闭合方式': 'C', '鞋帮高度': 'C',
+    '类别': 'D'
+}
 
 def get_all_keyattr() -> Dict[str, List[str]]:
     return OrderedDict({
@@ -291,3 +293,9 @@ def hash_obj(x):
 def is_too_close_negtive(a):
     # 如果只有图文不匹配，其他所有属性全匹配，但标题是原标题的子集。这说明是一个坏样本
     return not a['match']['图文'] and all(a['match'][k] for k in a['match'] if k!='图文') and set(a['title']).issubset(set(a['gt_title']))
+
+
+def attr_is_intersection(attra, attrb):
+    a = set(attr_type_map[k] for k in attra)
+    b = set(attr_type_map[k] for k in attrb)
+    return len(a.intersection(b)) > 0

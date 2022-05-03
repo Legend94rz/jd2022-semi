@@ -19,7 +19,7 @@ import datetime as dt
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.preprocessing import OrdinalEncoder
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModel, AutoConfig, VisualBertModel
-from tools import get_all_keyattr, read_label_data, extract_prop_from_title, is_equal, ufset, extract_color, extract_type, types, colors
+from tools import get_all_keyattr, read_label_data, extract_prop_from_title, is_equal, ufset, extract_color, extract_type, types, colors, attr_is_intersection
 import random
 import copy
 import matplotlib.pyplot as plt
@@ -451,9 +451,8 @@ class random_replace:
         # key_attr的 values 都在新替换的标题里
         obj['match'] = {k: int( is_equal(obj['gt_key_attr'].get(k), attr[k]) ) for k in attr}
         obj['match']['图文'] = 0
-        if set(attr) & set(obj['gt_key_attr']):
-            # 如果替换前后属性上有任何的交集，说明这两个基本上属于同一大类。这时候应该去掉原标题中未出现的属性，防止过多的不匹配
-            # todo: 当没有交集时，也不能说一定不属于同一大类。例如 A[衣长,领型] B[袖长,版型]，大概率都是上衣。如何解决？
+        # 如果替换前后属性（从描述上）属于同一大类（上衣、裤子、包、鞋）。这时候应该去掉原标题中未出现的属性，防止过多的不匹配
+        if attr_is_intersection(attr, obj['gt_key_attr']):
             keys = list(attr.keys())
             for k in keys:
                 if k not in obj['gt_key_attr']:
@@ -542,11 +541,14 @@ class delete_words:
 
 
 class replace_hidden:
-    def __init__(self):
+    def __init__(self, rep_color=False, rep_tp=False, rep_gender=False):
         self.colors = '|'.join(set.union(*[v for v in colors.values()]))
         self.inv_color = {w: k for k, v in colors.items() for w in v}
         self.types = '|'.join(set.union(*[v for v in types.values()]))
         self.inv_type = {w: k for k, v in types.items() for w in v}
+        self.rep_color = rep_color
+        self.rep_tp = rep_tp
+        self.rep_gender = rep_gender
 
     def _color_repl(self, title):
         color = re.findall(self.colors, title)
@@ -575,10 +577,10 @@ class replace_hidden:
         # 对于颜色，需要先确定颜色是哪个大类，修改为另一个大类里的。如果无法确定属于哪个大类则不替换。
         #words = jieba.lcut(obj['title'])
         title = obj['title']
-        color = self._color_repl(title)
-        tp = self._type_repl(title)
-        #gender = self._gender_repl(title)
-        choices = [x for x in [color, tp] if x is not None]
+        color = self._color_repl(title) if self.rep_color else None
+        tp = self._type_repl(title) if self.rep_tp else None
+        gender = self._gender_repl(title) if self.rep_gender else None
+        choices = [x for x in [color, tp, gender] if x is not None]
         if choices:
             for x in np.random.choice(len(choices), np.random.randint(1, len(choices)+1), replace=False):
                 x = choices[x]
@@ -620,94 +622,6 @@ class mutex_transform:
         i = np.random.choice(len(self.trans), p=self.p)
         #print(f'choose {i}')
         return self.trans[i](obj)
-
-
-class JsonDataset(Dataset):
-    tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
-
-    def __init__(self, literal2id, prop2id, objs, feature_db, prop, trans, enlarge=1):
-        # 这里应该只读图文匹配数据，用 trans 变换为不匹配的。
-        # 后续的未标记数据也是要预测其正确的标记才能用。
-        self.literal2id = literal2id
-        self.prop2id = prop2id
-        self.prop = prop
-        self.objs = objs
-        self.feature_db = feature_db
-        # trans: 指定如何变换一个 obj
-        self.trans = trans
-        self.enlarge = enlarge
-        
-    def __getitem__(self, i):
-        a = self.objs[i % len(self.objs)]
-        if self.trans:
-            a = self.trans(a)
-        # return: (img, q, v, [tt_ids + tt_atmask], qmask, qmatch, gtmask, gtoverall, target)
-        # global: literal2id, prop2id, prop
-        attr = a['key_attr']
-        prop = self.prop
-        assert set(a['match']) ^ set(attr) == {'图文'}, f"maybe a wrong data: {a}!!"   # 确保match 项与 attr 只差图文项
-        v = [self.literal2id[attr[k]] if k in attr else 0 for k in prop] # 0 是 pad_token，表示没在标题里找到。Nq x 768
-        qmask = [int(k in a['key_attr']) for k in prop]  # [Nq]
-        qmatch = [a['match'].get(k, 0) for k in prop] # [Nq]
-        gtmask = [int(k in a['gt_key_attr']) for k in prop]  # [Nq]
-        target = [self.prop2id[(k, ufset[a['gt_key_attr'][k]])] if k in a['gt_key_attr'] else 0 for k in prop]  # 不存在的关键属性可以随机填个数，这里默认是0。 [Nq]
-        return self.feature_db[a['img_name']], v, a['title'], qmask, qmatch, gtmask, a['match']['图文'], *target
-        
-    def __len__(self):
-        return int(len(self.objs) * self.enlarge)
-    
-    @classmethod
-    def collate_fn(cls, data):
-        feature = T.tensor([x[0] for x in data])
-        v = T.tensor([x[1] for x in data])
-        inputs = cls.tokenizer([x[2] for x in data], return_tensors='pt', padding=True, truncation=True)  # max_length ??
-        qmask = T.tensor([x[3] for x in data], dtype=T.float32)
-        qmatch = T.tensor([x[4] for x in data], dtype=T.float32)
-        gtmask = T.tensor([x[5] for x in data], dtype=T.float32)
-        gtoverall = T.tensor([x[6] for x in data], dtype=T.float32).reshape(-1, 1)
-        target = [T.tensor([x[7+i] for x in data]) for i in range(qmask.shape[1])]
-        return feature, v, inputs.input_ids, inputs.attention_mask, qmask, qmatch, gtmask, gtoverall, *target
-        
-
-class JsonTestDataset(Dataset):
-    tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
-
-    def __init__(self, literal2id, objs, prop):
-        self.literal2id = literal2id
-        self.prop = prop
-        self.objs = objs
-        
-    def __getitem__(self, i):
-        a = self.objs[i]
-        # return: (img, q, v, [tt_ids + tt_atmask], qmask, qmatch, gtmask, gtoverall, target)
-        # global: literal2id, prop2id, prop
-        prop = self.prop
-        if 'query' in a:
-            query = set(a['query'])
-            attr = extract_prop_from_title(a['title'])
-            if not (query - {'图文'}).issubset(set(attr.keys())):
-                warnings.warn(f"Query an inexist property. img:{a['img_name']}, query: {query}, title: {a['title']}, attr: {attr}")
-        else:
-            # 为方便本地验证
-            query = set(a['key_attr'].keys())
-            attr = a['key_attr']
-        # query mask: query 了哪些属性
-        # v: 对于每个 query，标题里的是什么
-        # k in attr and k in query 这个条件，用于当 a 有 query 字段时，确保 v 里的每个元素都是被 query ，且出现在标题里的。
-        # 验证：如果漏掉 k in query，那可能就会把标题里出现但没 query 的当输出。
-        # 如果漏掉 k in attr，那可能attr[k]找不到，报错。
-        v = [self.literal2id[attr[k]] if k in attr else 0 for k in prop]  # 0 是 pad_token，表示没在标题里找到。Nq x 768, Tensor
-        return a['feature'], v, a['title']
-        
-    def __len__(self):
-        return len(self.objs)
-    
-    @classmethod
-    def collate_fn(cls, data):
-        feature = T.tensor([x[0] for x in data])
-        v = T.tensor([x[1] for x in data])
-        inputs = cls.tokenizer([x[2] for x in data], return_tensors='pt', padding=True, truncation=True)  # max_length ??
-        return feature, v, inputs.input_ids, inputs.attention_mask
 
 
 class StackingModel(nn.Module):

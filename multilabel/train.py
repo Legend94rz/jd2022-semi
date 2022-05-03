@@ -100,10 +100,10 @@ def train_multilabel(fd):
             ], [0.5, 0.4, 0.5]),
             mutex_transform([
                 delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
-                replace_hidden(),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
+                replace_hidden(rep_tp=True, rep_color=True),  # 随机换类型、颜色中的至少一个，没有这些则保持原输入。
                 sequential_transform([
                     delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
-                    replace_hidden(),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
+                    replace_hidden(rep_tp=True, rep_color=True),  # 随机换类型、颜色中的至少一个，没有这些则保持原输入。
                 ], [1., 1.])
             ], [0.33, 0.33, 0.34]),
             lambda x: x
