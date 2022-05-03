@@ -27,6 +27,7 @@ if __name__ == "__main__":
         output_file = '+'.join(file_name) + f'-final.txt'
     else:
         output_file = args.output_file
+    match = 0
     with open(output_file, 'w') as fout:
         for i, o in enumerate(zip(*all_inputs)):
             assert all(a['img_name']==o[0]['img_name'] for a in o) and all(set(a['match']) == set(o[0]['match']) for a in o)
@@ -41,5 +42,7 @@ if __name__ == "__main__":
             if x['match']['图文']:
                 if any(not a for a in x['match'].values()):
                     print(f"warning: {x['img_name']} match, but one attr is not match: {x['match']}")
+                match += 1
             fout.write(json.dumps(x, ensure_ascii=False) + '\n')
-    print(f'writen submits to {output_file}!')
+    print(f'There are {match} matched items.')
+    print(f'writen submits to {output_file}')

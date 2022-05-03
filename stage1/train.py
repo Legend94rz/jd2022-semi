@@ -1,6 +1,6 @@
 from prj_config import Path, WORK_DATA, INPUT_DATA, PROJECT, PREPROCESS_OUTPUT, PREPROCESS_MOUNT, TEST_DATA, TRAIN_DATA, WEIGHT_OUTPUT, SUBMISSION_OUTPUT
 
-from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, EarlyStopping, ModelCheckpoint, F1Score, LambdaLayer, TensorBoard, BinaryAccuracyWithLogits, GradClipper
+from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, EarlyStopping, ModelCheckpoint, F1Score, LambdaLayer, TensorBoard, BinaryAccuracyWithLogits, GradClipper, StochasticWeightAveraging
 from fasttorch.misc.misc import seed_everything, Stage
 from fasttorch.metrics.metrics import BaseMeter
 from functools import partial
@@ -75,23 +75,22 @@ def train_model(fd):
         replace_hidden(rep_tp=True),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
         shuffle_title()
     ], [0.2, 0.2, 0.2, 0.2, 0.2])
-
-    val_score = []
+    EPOCHS = 26
     feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
-    train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
-    val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
+    #train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
+    train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
+    #val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
     m = MTLearner(ConcatFusion(prop_ncls, literal_embedding_clip, 'clip'), partial(T.optim.AdamW, lr=4e-4, eps=1e-8), [lambda x: x], amp=True)
     # todo: DDP <--> MP Kfold时 注意修改device
-    train_log, val_log = m.fit(JsonDataset(literal2id, prop2id, train_obj, feature_db, prop, trans, 10), 100, 256, 
-          [(None, 'online', OnlineMeter(len(prop_ncls))), (None, 'overall_f1', F1Score(0)), (None, 'clsacc', ClassificationPrecision(len(prop_ncls)))],
-          validation_set=JsonDataset(literal2id, prop2id, val_obj, feature_db, prop, None, 1), 
-          callbacks=[#TensorBoard('./tblog', epoch={f'#{fd}': ['online', 'val_online'], f'@{fd}': ['overall_f1', 'val_overall_f1']}, remove_existing=False), 
-                     ModelCheckpoint(str(WEIGHT_OUTPUT / f'SimpleFusion-{fd}.pt'), monitor='val_online', mode='max'), 
-                     EarlyStopping('val_online', patience=4, mode='max'), GradClipper(10)], device=f'cuda:{fd}',
-                     collate_fn=JsonDataset.collate_fn, num_workers=6, verbose=local_rank == 0, persistent_workers=False, pin_memory=True, prefetch_factor=4, shuffle=False)
-    val_score.append(val_log['val_online'].max())
-    print(val_score)
-    return np.mean(val_score)
+    train_log, val_log = m.fit(JsonDataset(literal2id, prop2id, train_obj, feature_db, prop, trans, 10), EPOCHS, 256, 
+        [(None, 'online', OnlineMeter(len(prop_ncls))), (None, 'overall_f1', F1Score(0)), (None, 'clsacc', ClassificationPrecision(len(prop_ncls)))],
+        #validation_set=JsonDataset(literal2id, prop2id, val_obj, feature_db, prop, None, 1), 
+        callbacks=[StochasticWeightAveraging(1e-6, str(WEIGHT_OUTPUT / f'SimpleFusion-swa-full.pt'), 16, anneal_epochs=10), 
+                   #ModelCheckpoint(str(WEIGHT_OUTPUT / f'SimpleFusion-{fd}.pt'), monitor='val_online', mode='max'), 
+                   #EarlyStopping('val_online', patience=4, mode='max'), 
+                   GradClipper(10)], device=f'cuda:{fd}',
+        collate_fn=JsonDataset.collate_fn, num_workers=6, verbose=local_rank == 0, persistent_workers=False, pin_memory=True, prefetch_factor=4, shuffle=False)
+    #print(val_log['val_online'].max())
 
 
 if __name__ == "__main__":
@@ -111,14 +110,12 @@ if __name__ == "__main__":
         candidate_title = data['candidate_title']
         candidate_attr = data['candidate_attr']
 
-    #train_model(0)
-    procs = []
-    for i in range(5):
-        p = mp.Process(target=train_model, args=(i, ))
-        p.start()
-        procs.append(p)
-    for p in procs:
-        p.join()
-        p.close()
-    #score = train_model()
-    #print(score)
+    train_model(0)
+    #procs = []
+    #for i in range(5):
+    #    p = mp.Process(target=train_model, args=(i, ))
+    #    p.start()
+    #    procs.append(p)
+    #for p in procs:
+    #    p.join()
+    #    p.close()

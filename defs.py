@@ -524,16 +524,16 @@ class delete_words:
         if len(info) < 1:
             return obj
         keep = sorted(np.random.choice(info, np.random.randint(1, len(info)+1), replace=False).tolist() + np.random.choice(other_id, np.random.randint(0, len(other_id)+1), replace=False).tolist())
-        inv_attr = {v: k for k, v in obj['key_attr'].items()}
         property_id = set(property_id)
         new_title = ''
         new_match = {'图文': 1}
         new_key_attr = {}
         for i in keep:
             new_title += words[i]
-            if i in property_id:
-                new_match[ inv_attr[words[i]] ] = 1
-                new_key_attr[ inv_attr[words[i]] ] = words[i]
+        for k, v in obj['key_attr'].items():
+            if v in new_title:
+                new_match[ k ] = 1
+                new_key_attr[ k ] = v
         obj['title'] = new_title
         obj['key_attr'] = new_key_attr
         obj['match'] = new_match

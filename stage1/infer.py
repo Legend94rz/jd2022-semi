@@ -19,11 +19,8 @@ from scipy.special import softmax, expit as sigmoid
 import argparse
 from transformers import AutoTokenizer
 import warnings
-from defs import MTLearner, ConcatFusion, SimpleFusion, OnlineMeter, random_confusion, random_delete, random_modify, random_replace, mutex_transform
+from defs import MTLearner, ConcatFusion
 from tools import extract_prop_from_title, attr_to_oh, compute_score, write_submit, ufset, std_obj
-CHECKPOINT_FOLDER = Path('../../data/model_data')
-SUBMISSION_FOLDER = Path('../../data/submission')
-DATA_FOLDER = Path('../../data/tmp_data')
 
 
 class JsonTestDataset(Dataset):
@@ -70,6 +67,8 @@ class JsonTestDataset(Dataset):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input_file', type=str, required=True)
+    parser.add_argument('-w', '--weight_files', type=str, nargs='+', required=True)
+    parser.add_argument('-o', '--output_file', type=str, required=True)
     return parser.parse_args()
 
 
@@ -81,15 +80,19 @@ def inference(prop, test_obj):
     overalls = []
     has_props = []
     logitss = [[] for _ in range(len(prop))]
-    for i in range(5):
-        m = MTLearner(ConcatFusion(prop_ncls, literal_embedding_clip, 'clip'), amp=True).load(CHECKPOINT_FOLDER / f'SimpleFusion-{i}.pt', 'cuda')
-        match, has_prop, overall, *logits = m.predict(JsonTestDataset(literal2id, test_obj, prop), batch_size=256, device='cuda', collate_fn=JsonTestDataset.collate_fn)
-        matches.append(sigmoid(match))
-        overalls.append(sigmoid(overall))
-        has_props.append(sigmoid(has_prop))
-        assert len(prop) == len(logits)
-        for j in range(len(logits)):
-            logitss[j].append(softmax(logits[j], axis=-1))
+    for i, pt in enumerate(args.weight_files):
+        pt = Path(pt)
+        if pt.exists():
+            m = MTLearner(ConcatFusion(prop_ncls, literal_embedding_clip, 'clip'), amp=True).load(pt, 'cuda')
+            match, has_prop, overall, *logits = m.predict(JsonTestDataset(literal2id, test_obj, prop), batch_size=256, device='cuda', collate_fn=JsonTestDataset.collate_fn)
+            matches.append(sigmoid(match))
+            overalls.append(sigmoid(overall))
+            has_props.append(sigmoid(has_prop))
+            assert len(prop) == len(logits)
+            for j in range(len(logits)):
+                logitss[j].append(softmax(logits[j], axis=-1))
+        else:
+            print(f"WARN: cannot find weights: {pt}")
 
     match = np.mean(matches, 0)
     has_prop = np.mean(has_props, 0)
@@ -135,7 +138,7 @@ def inference(prop, test_obj):
 
 if __name__ == "__main__":
     args = parse_args()
-    with open(DATA_FOLDER / 'props.pkl', 'rb') as fin:
+    with open(PREPROCESS_MOUNT / 'props.pkl', 'rb') as fin:
         data = pkl.load(fin)
         prop = data['prop']
         all_prop = data['all_prop']
@@ -153,4 +156,4 @@ if __name__ == "__main__":
         for x in tqdm(fin.readlines(), desc='read test'):
             online_test_obj.append(std_obj(json.loads(x)))
     submit_objs = inference(prop, online_test_obj)
-    write_submit(submit_objs, SUBMISSION_FOLDER / f'stage1_submit.txt', ignore_additional=False)
+    write_submit(submit_objs, args.output_file, ignore_additional=True)
