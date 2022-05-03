@@ -140,13 +140,14 @@ def neg_aug(obj, all_prop, ufset, table: pd.DataFrame, grouped_df: pd.DataFrame)
     n = len(res)
     for _ in range(n):
         i = np.random.choice(len(table))
-        row = table.iloc[i]
-        res.append({'img_name': obj['img_name'], 'txt': row['title'], 'match': 0})
+        title = table.iloc[i]['title']
+        if not set(title).issubset(set(obj['title'])):
+            res.append({'img_name': obj['img_name'], 'txt': title, 'match': 0})
     return res
 
 
 def train_pairwise(fd):
-    EPOCHS = 9
+    EPOCHS = 7
     feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
     train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
     unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'unmatched')
@@ -182,7 +183,7 @@ def train_pairwise(fd):
         #validation_set=PairwiseDataset(val_samples, feature_db),
         callbacks=[
             # todo: 改下参数swa_start=3, anneal_epochs=5
-            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 3, anneal_epochs=5), 
+            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 4, anneal_epochs=3), 
             #EarlyStopping('val_loss', 4, 'min'), 
             #ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
         ], 
