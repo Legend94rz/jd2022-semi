@@ -20,6 +20,8 @@ import lmdb
 import shutil
 import re
 import gc
+import multiprocessing as mp
+import argparse
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # tokenizer 被 fork 的话会报 warning. todo: 探究下如何实现的
 device = 'cuda' if T.cuda.is_available() else 'cpu'
 
@@ -37,7 +39,14 @@ def aug_sample(x):
     return trans(a)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--offline_val', action='store_true')
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
     PREPROCESS_OUTPUT.mkdir(exist_ok=True, parents=True)
     prop = get_eq_attr()    # todo: 完善
     prop2id = OrderedDict()  # 由于不同属性下的取值可能相同，所以使用(属性名，属性取值)作为key。等价属性已经替换了。
@@ -134,19 +143,59 @@ if __name__ == "__main__":
         env = lmdb.open(str(out_file), int(1e12), max_dbs=128)
 
         db = env.open_db(b'val')
-        with env.begin(db=db, write=True) as txn:
-            # 线上内存不够，也采用在线增广。
-            for i, x in enumerate(val_idx):
-                x = objs[x]
-                txn.put(str(i).encode(), pkl.dumps({
-                    'img_name': x['img_name'],
-                    'title': x['title'],
-                    'match': x['match'],
-                    'key_attr': x['key_attr'],
-                    'gt_key_attr': x['key_attr'].copy(),
-                    'gt_title': x['title'],
-                    'meta': get_meta(x)
-                }))
+        if args.offline_val:
+            p = mp.Pool(25)
+            # 如果离线生成验证集：
+            uni = set()
+            res = p.imap(aug_sample, (objs[i] for _ in range(5) for i in val_idx), chunksize=10000)
+            with env.begin(db=db, write=True) as txn:
+                for i, x in enumerate(tqdm(res)):
+                    # 丢弃掉过于接近的
+                    if is_too_close_negtive(x):
+                        continue
+                    h = hash_obj(x)
+                    if h not in uni:
+                        uni.add(h)
+                        txn.put(str(i).encode(), pkl.dumps({
+                            'img_name': x['img_name'],
+                            'title': x['title'],
+                            'match': x['match'],
+                            'key_attr': x['key_attr'],
+                            'gt_key_attr': x['gt_key_attr'],
+                            'gt_title': x['gt_title'],
+                            'meta': get_meta(x)
+                        }))
+                # 确保原数据都保存了
+                for i, x in enumerate(val_idx):
+                    x = objs[x]
+                    h = hash_obj(x)
+                    if h not in uni:
+                        uni.add(h)
+                        txn.put(str(i).encode(), pkl.dumps({
+                            'img_name': x['img_name'],
+                            'title': x['title'],
+                            'match': x['match'],
+                            'key_attr': x['key_attr'],
+                            'gt_key_attr': x['key_attr'].copy(),
+                            'gt_title': x['title'],
+                            'meta': get_meta(x)
+                        }))
+            p.close()
+            p.join()
+        else:
+            # 否则，线上内存不够，也采用在线增广。
+            with env.begin(db=db, write=True) as txn:
+                for i, x in enumerate(val_idx):
+                    x = objs[x]
+                    txn.put(str(i).encode(), pkl.dumps({
+                        'img_name': x['img_name'],
+                        'title': x['title'],
+                        'match': x['match'],
+                        'key_attr': x['key_attr'],
+                        'gt_key_attr': x['key_attr'].copy(),
+                        'gt_title': x['title'],
+                        'meta': get_meta(x)
+                    }))
         
         # 训练集暂时采用线上增广的方式
         db = env.open_db(b'train')

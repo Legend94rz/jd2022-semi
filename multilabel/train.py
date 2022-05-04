@@ -29,7 +29,7 @@ from functools import partial
 from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter, VisualBert, random_delete, random_modify, random_replace, mutex_transform, sequential_transform, delete_words, replace_hidden, shuffle_title
 from tools import ufset, extract_color, extract_type, is_too_close_negtive
 seed_everything(43)
-BERT = 'bert-base-chinese'
+BERT = 'youzanai/bert-product-title-chinese'
 
 
 class MultiLabelDataset(Dataset):
@@ -91,28 +91,23 @@ def train_multilabel(fd):
     # delete_words: 对正样本增广，保持为正
     # replace_hidden: 正样本增广为负样本。替换类型、颜色或性别
     # todo: lr/swa参数
-    trans = sequential_transform([
+    trans = mutex_transform([
+        sequential_transform([
+            random_replace(candidate_attr, candidate_title),
+            random_delete(0.3),
+            random_modify(0.3, prop)
+        ], [0.5, 0.4, 0.5]),
         mutex_transform([
+            delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
+            replace_hidden(rep_color=True, rep_tp=True),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
             sequential_transform([
-                random_replace(candidate_attr, candidate_title),
-                random_delete(0.3),
-                random_modify(0.3, prop)
-            ], [0.5, 0.4, 0.5]),
-            mutex_transform([
                 delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
-                replace_hidden(rep_tp=True, rep_color=True),  # 随机换类型、颜色中的至少一个，没有这些则保持原输入。
-                sequential_transform([
-                    delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
-                    replace_hidden(rep_tp=True, rep_color=True),  # 随机换类型、颜色中的至少一个，没有这些则保持原输入。
-                ], [1., 1.])
-            ], [0.33, 0.33, 0.34]),
-            lambda x: x
-        ], [0.5, 0.45, 0.05]),
-        shuffle_title()
-    ], [1.0, 0.8])
+                replace_hidden(rep_color=True, rep_tp=True),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
+            ], [1., 1.])
+        ], [0.33, 0.33, 0.34]),
+        lambda x: x
+    ], [0.5, 0.45, 0.05])
 
-    #module = VisualBert(len(prop)+1)
-    #opt = T.optim.AdamW([{'params': module.vbert.parameters(), 'lr': 1e-5, 'weight_decay': 1e-6}, {'params': module.cls.parameters()}])
     m = MultiLabelLearner(VisualBert(len(prop)+1, 6, BERT), partial(T.optim.AdamW, lr=2e-5, weight_decay=1e-6), [nn.BCEWithLogitsLoss()], amp=True)
     _, val_log = m.fit(MultiLabelDataset(train_obj, feature_db, prop, trans, 5), EPOCHS, 256, [(0, 'online', OnlineMeter(len(prop_ncls)))], 
         #validation_set=MultiLabelDataset(val_obj, feature_db, prop),
