@@ -19,16 +19,16 @@ types = {
 }
 colors = {
     '红色': set('红色|大红色|酱红色|橘红色|粉红色|浅粉色|粉色|砖红色|酒红色'.split('|')),
-    '橙色': set('橙色|金色|焦糖色|杏色'.split('|')), 
-    '黄色': set('咖啡色|卡其色|褐色|鹅黄色'.split('|')), 
+    '黄色': set('黄色|橙色|金色|焦糖色|杏色|咖啡色|卡其色|褐色|鹅黄色'.split('|')), 
     '绿色': set('绿色|墨绿色|橄榄绿'.split('|')),
-    '蓝色': set('灰蓝色|蓝色|浅蓝色|海蓝色|粉蓝色|天蓝色|海蓝色'.split('|')), 
-    '青色': {'藏青色'},
+    '蓝色': set('蓝色|灰蓝色|浅蓝色|海蓝色|粉蓝色|天蓝色|海蓝色'.split('|')), 
+    '青色': set('青色|藏青色'.split('|')),
     '紫色': set('紫色|暗紫色'.split('|')), 
     '黑色': {'黑色'},
     '白色': set('白色|米色|银色|米白色'.split('|')), 
     '灰色': set('灰色|浅灰色'.split('|'))
 }
+inv_color = {w: k for k, v in colors.items() for w in v}
 attr_type_map = {
     '裤型': 'A', '裤长': 'A', '裤门襟': 'A',
     '版型': 'B', '穿着方式': 'B', '袖长': 'B', '衣长': 'B', '领型': 'B', '裙长': 'B',
@@ -114,6 +114,14 @@ def std_obj(obj):
     for k, v in attr.items():
         if ufset[v] != v:
             t = t.replace(v, ufset[v])
+    ## std color
+    #pattern = '|'.join(set.union(*[v for v in colors.values()]))
+    #res = re.findall(pattern, t)
+    #c = set(inv_color[k] for k in res)
+    #if len(c) == 1:
+    #    c = list(c)[0]
+    #    t = re.sub('|'.join(res), c, t)
+
     ret = {
         'img_name': obj['img_name'], 
         'title': t,
