@@ -304,6 +304,8 @@ def is_too_close_negtive(a):
 
 
 def attr_is_intersection(attra, attrb):
-    a = set(attr_type_map[k] for k in attra)
-    b = set(attr_type_map[k] for k in attrb)
+    #a = set(attr_type_map[k] for k in attra)
+    #b = set(attr_type_map[k] for k in attrb)
+    a = set(attra)
+    b = set(attrb)
     return len(a.intersection(b)) > 0

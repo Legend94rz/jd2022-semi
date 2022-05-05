@@ -48,3 +48,5 @@ multilabel的验证集需要重新生成、模型需要重新训练。
 vbert multilabel, 改成replace_hidden(rep_color=False, rep_tp=True)，不再进行颜色增广。全量数据，26个epoch, 16+10swa。线下训练集0.98378。线上0.9136121902986771。
 似乎确实不能增广颜色。
 
+0505-2
+vbert multilabel, 回退了random_replace的修改。只有当有属性交集时去掉替换标题的属性。重新预处理，全量数据，26个epoch, 16+10swa。线下训练集0.98199。线上0.9139804496067645。
