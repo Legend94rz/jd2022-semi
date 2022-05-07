@@ -50,3 +50,12 @@ vbert multilabel, 改成replace_hidden(rep_color=False, rep_tp=True)，不再进
 
 0505-2
 vbert multilabel, 回退了random_replace的修改。只有当有属性交集时去掉替换标题的属性。重新预处理，全量数据，26个epoch, 16+10swa。线下训练集0.98199。线上0.9139804496067645。
+
+
+0506-1
+pairwise. 重写了数据生成逻辑，使用在线方式，用6层YZbert初始化。5折线下0.949399712。线上5折0.9101974132836297
+
+0506-2
+带swa的线上：0.90922021184707 .
+
+0506这两个提交分别是交的ModelCheckpoint和SWA的权重。0506-2线上提交出错了一次，实际提交在0507-1。

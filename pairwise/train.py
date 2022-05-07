@@ -26,26 +26,29 @@ from transformers import AutoTokenizer, AutoModel
 import multiprocessing as mp
 import re
 from functools import partial
-from defs import LmdbObj, MoEx1d, PrjImg
+import copy
+from defs import LmdbObj, MoEx1d, PrjImg, random_modify, random_delete, random_add_words, mutex_transform, sequential_transform, random_replace
 from tools import ufset
 seed_everything(43)
 
 
 class YZBertTextEnc(nn.Module):
-    def __init__(self):
+    def __init__(self, nlayer=None):
         super().__init__()
         self.enc = AutoModel.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True).eval().requires_grad_(False)
+        if nlayer is not None:
+            self.enc.encoder.layer = self.enc.encoder.layer[:nlayer]
 
     def forward(self, input_ids, attention_mask):
         return self.enc(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
     
 
 class TitleImg(nn.Module):
-    def __init__(self):
+    def __init__(self, nlayer=None):
         super().__init__()
         d = 128
         self.img_prj = nn.Sequential(nn.Dropout(0.15), nn.Linear(2048, 256), nn.ReLU(), nn.Linear(256, d))
-        self.txt_enc = YZBertTextEnc()
+        self.txt_enc = YZBertTextEnc(nlayer)
         self.txt_prj = nn.Sequential(nn.Dropout(0.1), nn.Linear(768, d))
         self.padmask = nn.ConstantPad1d((1, 0), 1)
         enc = nn.TransformerEncoderLayer(d, 4, dim_feedforward=256, batch_first=True, norm_first=True)
@@ -66,13 +69,24 @@ class TitleImg(nn.Module):
 class PairwiseDataset(Dataset):
     tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
 
-    def __init__(self, data, feature_db):
+    def __init__(self, data, feature_db, trans=None):
         #data: [{img_name, txt, match}, ...]
         self.data = data
         self.feature_db = feature_db
+        self.trans = trans
 
     def __getitem__(self, index):
         a = self.data[index]
+        if 'txt' in a:
+            pass
+        else:
+            if self.trans:
+                a = self.trans(copy.deepcopy(a))
+                a = {'img_name': a['img_name'], 'txt': a['title'], 'match': a['match']['图文']}
+            else:
+                assert 'match' not in a and 'title' in a
+                a['match'] = 0
+                a['txt'] = a['title']
         return self.feature_db[a['img_name']], a['txt'], a['match']
 
     def __len__(self):
@@ -93,18 +107,10 @@ def make_sample(obj, prop, ufset):
     res = []
     attr = obj['key_attr']
     for k, v in attr.items():
-        if k in {'颜色', '性别'}:
-            continue
-        #if k == '领型':
-        #    values = np.random.choice(prop[k], len(prop[k]) // 2, replace=False)
-        #else:
         values = prop[k]
         for x in values:
-            res.append({'img_name': obj['img_name'], 'txt': x, 'match': int(ufset[v] == ufset[x])})
-    #others = list(set(prop) - set(attr))
-    #k = np.random.choice(others)
-    #for x in prop[k]:
-    #    res.append({'img_name': obj['img_name'], 'txt': x, 'match': 0})
+            m = int(ufset[v] == ufset[x])
+            res.append({'img_name': obj['img_name'], 'title': x, 'match': {k: m, '图文': m}, 'key_attr': {k: x}, 'gt_title': obj['gt_title'], 'gt_key_attr': obj['gt_key_attr'].copy()})
     return res
 
 
@@ -146,49 +152,49 @@ def neg_aug(obj, all_prop, ufset, table: pd.DataFrame, grouped_df: pd.DataFrame)
 
 
 def train_pairwise(fd):
-    EPOCHS = 7
+    EPOCHS = 1000
     feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
-    train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
-    unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'unmatched')
-    #train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
-    #unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')
+    #train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
+    #unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'unmatched')
+    train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
+    unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')
 
-    samples = []
-    for x in tqdm(train_obj):
-        samples.extend(make_sample(x, prop, ufset))
-        samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
-        samples.extend(pos_aug(x, ufset))
-    for x in tqdm(unmatched_train):
-        samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
-    print(sum([x['match'] for x in samples]), len(samples))
+    train_ds = ConcatDataset([
+        PairwiseDataset([a for x in tqdm(train_obj) for a in make_sample(x, prop, ufset)], feature_db, mutex_transform([random_add_words(0.4), lambda x: x], [0.3, 0.7])),
+        PairwiseDataset(train_obj, feature_db, random_delete(0.4)),
+        PairwiseDataset(train_obj, feature_db, mutex_transform([random_replace(candidate_attr, candidate_title), random_modify(0.3, prop)], [0.5, 0.5])),
+        PairwiseDataset(unmatched_train, feature_db)
+    ])
+    print(len(train_ds))
     
-    #val_samples = []
-    #unique = set()
-    #val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
-    #unmatched_val = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val')
-    #for x in tqdm(val_obj):
-    #    if x['img_name'] not in unique:
-    #        x = {'img_name': x['img_name'], 'key_attr': x['gt_key_attr'], 'match': {**{'图文': 1}, **{k:1 for k in x['gt_key_attr']}}, 'title': x['gt_title'], 'gt_key_attr': x['gt_key_attr'].copy()}
-    #        val_samples.extend(make_sample(x, prop, ufset))
-    #        val_samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
-    #        val_samples.extend(pos_aug(x, ufset))
-    #        unique.add(x['img_name'])
-    #for x in tqdm(unmatched_val):
-    #    val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
-    #print(sum([x['match'] for x in val_samples]), len(val_samples))
+    val_samples = []
+    unique = set()
+    val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
+    unmatched_val = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val')
+    for x in tqdm(val_obj):
+        if x['img_name'] not in unique:
+            x = {'img_name': x['img_name'], 'key_attr': x['gt_key_attr'], 'match': {**{'图文': 1}, **{k:1 for k in x['gt_key_attr']}}, 'title': x['gt_title'], 'gt_title': x['gt_title'], 'gt_key_attr': x['gt_key_attr'].copy()}
+            tmpx = make_sample(x, prop, ufset)
+            for a in tmpx:
+                val_samples.append({'img_name': a['img_name'], 'txt': a['title'], 'match': a['match']['图文']})
+            val_samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
+            val_samples.extend(pos_aug(x, ufset))
+            unique.add(x['img_name'])
+    for x in tqdm(unmatched_val):
+        val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
+    print(sum([x['match'] for x in val_samples]), len(val_samples))
 
-    m = Learner(TitleImg(), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
-    _, val_log = m.fit(PairwiseDataset(samples, feature_db), EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
-        #validation_set=PairwiseDataset(val_samples, feature_db),
+    m = Learner(TitleImg(6), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
+    _, val_log = m.fit(train_ds, EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
+        validation_set=PairwiseDataset(val_samples, feature_db),
         callbacks=[
-            # todo: 改下参数swa_start=3, anneal_epochs=5
-            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 4, anneal_epochs=3), 
-            #EarlyStopping('val_loss', 4, 'min'), 
-            #ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
+            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-{fd}.pt'), 4, anneal_epochs=5), 
+            EarlyStopping('val_loss', 3, 'min'), 
+            ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
         ], 
         device=f'cuda:{fd}', collate_fn=PairwiseDataset.collate_fn, num_workers=8, shuffle=True
     )
-    #print(val_log['val_acc'].max())
+    print(val_log['val_acc'].max())
 
 
 if __name__ == "__main__":
@@ -207,12 +213,12 @@ if __name__ == "__main__":
     table = pd.concat([pd.DataFrame(candidate_title, columns=['title']), pd.DataFrame.from_records(candidate_attr)], axis=1)
     grouped_df = table.groupby(list(prop), dropna=False)['title'].agg(set)
 
-    train_pairwise(0)
-    #procs = []
-    #for i in range(5):
-    #    p = mp.Process(target=train_pairwise, args=(i, ))
-    #    p.start()
-    #    procs.append(p)
-    #for p in procs:
-    #    p.join()
-    #    p.close()
+    #train_pairwise(0)
+    procs = []
+    for i in range(5):
+        p = mp.Process(target=train_pairwise, args=(i, ))
+        p.start()
+        procs.append(p)
+    for p in procs:
+        p.join()
+        p.close()

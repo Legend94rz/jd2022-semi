@@ -473,20 +473,22 @@ class random_add_words:
     def __call__(self, obj):
         self_words = jieba.lcut(obj['title'])
         ori_words = jieba.lcut(obj['gt_title'])
+        gt_attr = obj['gt_key_attr']
+        inv_gt_attr = {v: k for k, v in gt_attr.items()}
         no_appear = list(set(ori_words) - set(self_words))
         t = obj['title']
         for w in no_appear:
             if np.random.random() < self.p:
+                if w in inv_gt_attr:# 如果要添加的词是一个属性值
+                    if inv_gt_attr[w] in obj['key_attr']: # 如果该属性已经在标题里出现过了，不能添加，跳过。
+                        continue
+                    obj['key_attr'][inv_gt_attr[w]] = w
+                    obj['match'][inv_gt_attr[w]] = 1
                 if np.random.random() < 0.5:
                     t = w + t
                 else:
                     t = t + w
-        new_attr = extract_prop_from_title(t)
         obj['title'] = t
-        for k, v in new_attr.items():
-            if k not in obj['key_attr']:
-                obj['key_attr'][k] = v
-                obj['match'][k] = 1
         return obj
 
 

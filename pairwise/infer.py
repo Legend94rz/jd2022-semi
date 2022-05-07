@@ -72,7 +72,7 @@ if __name__ == "__main__":
     for i, pt in enumerate(args.weight_files):
         pt = Path(pt)
         if pt.exists():
-            m = Learner(TitleImg(), amp=True).load(pt, 'cuda')
+            m = Learner(TitleImg(6), amp=True).load(pt, 'cuda')
             output = m.predict(ds, 256, device='cuda', collate_fn=PairwiseTestDataset.collate_fn)
             output = sigmoid(output).reshape(-1)
             probs.append(output)
