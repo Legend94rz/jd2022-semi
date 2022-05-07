@@ -373,8 +373,20 @@ class random_delete:
     def __call__(self, obj):
         matched_k = [k for k in obj['key_attr'] if obj['match'][k]]
         unmatched_k = [k for k in obj['key_attr'] if not obj['match'][k]]
-        ms = [k for k in matched_k if np.random.random() < self.p2][:len(matched_k) - 1]
-        ums = [k for k in unmatched_k if np.random.random() < self.p2][:len(unmatched_k) - 1]
+        ums = []
+        ms = []
+        if not obj['match']['图文']:
+            #至少保留一个不匹配，但可能存在没有不匹配的属性
+            if unmatched_k:
+                ums = np.random.choice(unmatched_k, np.random.randint(0, len(unmatched_k)), replace=False).tolist()
+            #匹配项可以全删
+            if matched_k:
+                ms = np.random.choice(matched_k, np.random.randint(0, len(matched_k)+1), replace=False).tolist()
+        else:
+            assert len(unmatched_k) == 0
+            #匹配项可以全删
+            if matched_k:
+                ms = np.random.choice(matched_k, np.random.randint(0, len(matched_k)+1), replace=False).tolist()
         for k in ms + ums:
             v = obj['key_attr'][k]
             obj['title'] = obj['title'].replace(v, '')  # 从标题中删除
