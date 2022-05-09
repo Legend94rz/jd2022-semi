@@ -44,15 +44,17 @@ class YZBertTextEnc(nn.Module):
     
 
 class TitleImg(nn.Module):
-    def __init__(self):
+    def __init__(self, embeddings):
         super().__init__()
-        self.img = nn.Sequential(nn.Linear(2048, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.1), nn.Linear(256, 256), nn.ReLU(), nn.Dropout(0.1))
-        self.txt = nn.Sequential(nn.Linear(250, 128), nn.ReLU())
-        self.cls = nn.Linear(256+128, 1)
+        self.img = nn.Sequential(nn.Linear(2048, 256), nn.ReLU(), nn.Dropout(0.1), nn.Linear(256, 256), nn.ReLU(), nn.Dropout(0.1))
+        self.txt = nn.Sequential(nn.Embedding.from_pretrained(embeddings, padding_idx=0), nn.Linear(768, 128), nn.ReLU())
+        self.cls = nn.Sequential(nn.Linear(256+128, 1))
     
     def forward(self, img, txt):
         img = self.img(img)
-        txt = self.txt(txt)
+        mask = (txt != 0).float().unsqueeze(-1)  # [B, L, 1]
+        txt = self.txt(txt) # [B, L, d]
+        txt = (txt * mask).sum(1) / mask.sum(1) # [B, d]
         logit = self.cls(T.cat([img, txt], dim=-1))
         return logit
 
@@ -60,15 +62,16 @@ class TitleImg(nn.Module):
 class PairwiseDataset(Dataset):
     tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
 
-    def __init__(self, data, feature_db):
+    def __init__(self, data, feature_db, word2index):
         #data: [{img_name, txt, match}, ...]
         self.data = data
         self.feature_db = feature_db
+        self.word2index = word2index
 
     def __getitem__(self, index):
         a = self.data[index]
-        txt = tfv.transform([a['txt']]).toarray()
-        return self.feature_db[a['img_name']], txt, a['match']
+        ids = [self.word2index.get(x, 1) for x in jieba.lcut(a['txt'])]
+        return self.feature_db[a['img_name']], ids, a['match']
 
     def __len__(self):
         return len(self.data)
@@ -76,7 +79,7 @@ class PairwiseDataset(Dataset):
     @classmethod
     def collate_fn(cls, data):
         feature = T.tensor([x[0] for x in data], dtype=T.float32)
-        txt = T.tensor(np.concatenate([x[1] for x in data], axis=0), dtype=T.float32)
+        txt = T.nn.utils.rnn.pad_sequence([T.tensor(x[1], dtype=T.long) for x in data], batch_first=True)
         label = T.tensor([x[2] for x in data], dtype=T.float32).reshape(-1, 1)
         return feature, txt, label
 
@@ -172,9 +175,9 @@ def train_pairwise(fd):
         val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
     print(sum([x['match'] for x in val_samples]), len(val_samples))
 
-    m = Learner(TitleImg(), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
-    _, val_log = m.fit(PairwiseDataset(samples, feature_db), EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
-        validation_set=PairwiseDataset(val_samples, feature_db),
+    m = Learner(TitleImg(embedding), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=False)
+    _, val_log = m.fit(PairwiseDataset(samples, feature_db, word2index), EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
+        validation_set=PairwiseDataset(val_samples, feature_db, word2index),
         callbacks=[
             #StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 4, anneal_epochs=3), 
             EarlyStopping('val_loss', 4, 'min'), 
@@ -200,14 +203,24 @@ if __name__ == "__main__":
         candidate_meta = data['candidate_meta']
     table = pd.concat([pd.DataFrame(candidate_title, columns=['title']), pd.DataFrame.from_records(candidate_attr)], axis=1)
     grouped_df = table.groupby(list(prop), dropna=False)['title'].agg(set)
+
     tfv = TfidfVectorizer(token_pattern=r'(?u)\b\w\w+\b', max_features=250)
     tfv.fit([' '.join(jieba.lcut(x)) for x in candidate_title])
-    inputs = PairwiseDataset.tokenizer(tfv.get_feature_names_out().tolist(), return_tensors='pt', padding=True, truncation=True)
-    m = AutoModel.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True).eval().requires_grad_(False).to('cuda')
-    embedding = m(**inputs).pooler_output
-    
+    m = AutoModel.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True).eval().requires_grad_(False).to('cpu')
+    tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
+    unk = tokenizer.special_tokens_map['unk_token']
+    pad = tokenizer.special_tokens_map['pad_token']
+    word2index = {k: v+2 for k, v in tfv.vocabulary_.items()}
+    word2index[pad] = 0
+    word2index[unk] = 1
+    allwords = [pad, unk] + tfv.get_feature_names_out().tolist()
+    assert all(i==word2index[v] for i, v in enumerate(allwords))
 
-    train_pairwise(0)
+    inputs = tokenizer(allwords, return_tensors='pt', padding=True, truncation=True)
+    embedding = m(**inputs).pooler_output
+    del m, tokenizer
+
+    train_pairwise(1)
     #procs = []
     #for i in range(5):
     #    p = mp.Process(target=train_pairwise, args=(i, ))

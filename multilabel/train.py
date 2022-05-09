@@ -71,6 +71,17 @@ class MultiLabelLearner(Learner):
             return self.module(*batch_data)
         return self.module(*batch_data[:3])
 
+    def compute_losses(self, forward_results, batch_data):
+        logits = forward_results[0]
+        *_, qmask, qmatch = batch_data
+        pmatch = qmatch[:, :-1]
+        pmask = qmask[:, :-1]
+        overall = qmatch[:, -1].reshape(-1, 1)
+        masked_min_match = ((1.0 - pmask) * pmatch.max().detach() + pmask * pmatch).min(1, keepdims=True).values
+        reg = F.kl_div(F.logsigmoid(masked_min_match), F.logsigmoid(overall), reduction='batchmean', log_target=True)  # 如果overall了，那query对应的match的要==1；如果matchc对应的 query==0，那么 overall 要==0。
+        loss = 0.7*F.binary_cross_entropy_with_logits(logits, qmatch) + 0.3*reg
+        return loss
+
     def compute_metric(self, idx, name, func, detached_results, batch_data):
         if name == 'online':
             match = detached_results[0]
