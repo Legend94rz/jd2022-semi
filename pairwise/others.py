@@ -34,13 +34,13 @@ from tools import ufset
 seed_everything(43)
 
 
-class YZBertTextEnc(nn.Module):
+class BertTextEnc(nn.Module):
     def __init__(self):
         super().__init__()
-        self.enc = AutoModel.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True).eval().requires_grad_(False)
+        self.enc = AutoModel.from_pretrained("bert-base-chinese", local_files_only=True)
 
     def forward(self, input_ids, attention_mask):
-        return self.enc(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
+        return self.enc(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=False, output_attentions=False).pooler_output
     
 
 class TitleImg(nn.Module):

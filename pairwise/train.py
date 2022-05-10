@@ -188,7 +188,7 @@ def train_pairwise(fd):
     _, val_log = m.fit(train_ds, EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
         #validation_set=PairwiseDataset(val_samples, feature_db),
         callbacks=[
-            StochasticWeightAveraging(5e-5, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 6, anneal_epochs=4), 
+            StochasticWeightAveraging(5e-5, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 4, anneal_epochs=5), 
             #EarlyStopping('val_loss', 3, 'min'), 
             #ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
         ], 
