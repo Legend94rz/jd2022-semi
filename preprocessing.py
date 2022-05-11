@@ -211,6 +211,7 @@ if __name__ == "__main__":
                     'gt_title': x['title'],
                     'meta': get_meta(x)
                 }))
+        env.close()
 
     print('writing unmatched data...')
     for fd, (train_idx, val_idx) in enumerate(kf.split(range(len(unmatched)))):
@@ -234,6 +235,7 @@ if __name__ == "__main__":
                     'img_name': x['img_name'],
                     'title': x['title']
                 }))
+        env.close()
 
     print('writing full matched data (not split)...')
     out_file = PREPROCESS_OUTPUT / f'full.json'

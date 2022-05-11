@@ -8,7 +8,7 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, ConcatDataset
-from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts
+from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from fasttorch.metrics.metrics import BaseMeter
 from fasttorch.misc.misc import seed_everything
 from tqdm import tqdm
@@ -152,7 +152,7 @@ def neg_aug(obj, all_prop, ufset, table: pd.DataFrame, grouped_df: pd.DataFrame)
 
 
 def train_pairwise(fd):
-    EPOCHS = 10
+    EPOCHS = 7
     feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
     train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
     unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'unmatched')
@@ -160,7 +160,7 @@ def train_pairwise(fd):
     #unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')
 
     train_ds = ConcatDataset([
-        PairwiseDataset([a for x in tqdm(train_obj) for a in make_sample(x, prop, ufset)], feature_db, mutex_transform([random_add_words(0.4), lambda x: x], [0.3, 0.7])),
+        PairwiseDataset([a for x in tqdm(train_obj) for a in make_sample(x, prop, ufset)], feature_db, lambda x: x),
         PairwiseDataset(train_obj, feature_db, random_delete(0.4)),
         PairwiseDataset(train_obj, feature_db, mutex_transform([random_replace(candidate_attr, candidate_title), random_modify(0.3, prop)], [0.5, 0.5])),
         PairwiseDataset(unmatched_train, feature_db)
@@ -184,11 +184,11 @@ def train_pairwise(fd):
     #    val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
     #print(sum([x['match'] for x in val_samples]), len(val_samples))
 
-    m = Learner(TitleImg(6), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
+    m = Learner(TitleImg(), T.optim.Adam, [nn.BCEWithLogitsLoss()], amp=True)
     _, val_log = m.fit(train_ds, EPOCHS, 256, [(0, 'acc', BinaryAccuracyWithLogits())], 
         #validation_set=PairwiseDataset(val_samples, feature_db),
         callbacks=[
-            StochasticWeightAveraging(5e-5, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 4, anneal_epochs=5), 
+            StochasticWeightAveraging(1e-4, str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-swa-full.pt'), 5, anneal_epochs=2), 
             #EarlyStopping('val_loss', 3, 'min'), 
             #ModelCheckpoint(str(WEIGHT_OUTPUT / f'pairwise-no-extra-neg-{fd}.pt'), 'val_loss', mode='min')
         ], 
