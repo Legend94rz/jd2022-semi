@@ -29,7 +29,7 @@ from functools import partial
 import argparse
 from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter
 from tools import ufset, std_obj, write_submit, get_eq_attr
-from .train2 import ConcatBert
+from .train2 import LXMERT
 seed_everything(43)
 
 
@@ -61,7 +61,7 @@ def parse_args():
     return parser.parse_args()
 
 
-# visualbert-swa
+# lxmert-swa
 if __name__ == "__main__":
     args = parse_args()
     prop = get_eq_attr()
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     for i, pt in enumerate(args.weight_files):
         pt = Path(pt)
         if pt.exists():
-            m = Learner(ConcatBert(len(prop) + 1), amp=True).load(pt, 'cuda')
+            m = Learner(LXMERT(len(prop) + 1, (4, 3, 3)), amp=True).load(pt, 'cuda')
             output = m.predict(ds, 256, device='cuda', collate_fn=MultiLabelTestDataset.collate_fn)
             output = sigmoid(output)
             probs.append(output)

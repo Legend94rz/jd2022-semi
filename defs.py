@@ -18,7 +18,7 @@ from tqdm import tqdm
 import datetime as dt
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.preprocessing import OrdinalEncoder
-from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModel, AutoConfig, VisualBertModel
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModel, AutoConfig, VisualBertModel, LxmertModel
 from tools import get_all_keyattr, read_label_data, extract_prop_from_title, is_equal, ufset, extract_color, extract_type, types, colors, attr_is_intersection
 import random
 import copy
@@ -78,6 +78,21 @@ def get_vbert(pretrained_bert='youzanai/bert-product-title-chinese', nlayer=None
     if nlayer is not None:
         vbert.encoder.layer = vbert.encoder.layer[:nlayer]
     return vbert
+
+
+def get_lxmert(pretrained="hfl/chinese-roberta-wwm-ext", nlayer=None):
+    bert = AutoModel.from_pretrained(pretrained, local_files_only=True)
+    cfg = AutoConfig.from_pretrained('unc-nlp/lxmert-base-uncased', local_files_only=True)
+    cfg.vocab_size = bert.config.vocab_size
+    lx = LxmertModel(cfg)
+    lx.embeddings.load_state_dict(bert.embeddings.state_dict(), strict=False)
+    lx.encoder.layer.load_state_dict(bert.encoder.layer[:9].state_dict())
+    if nlayer is not None:
+        lx.encoder.layer = lx.encoder.layer[:nlayer[0]]
+        lx.encoder.x_layers = lx.encoder.x_layers[:nlayer[1]]
+        lx.encoder.r_layers = lx.encoder.r_layers[:nlayer[2]]
+    lx.pooler.load_state_dict(bert.pooler.state_dict())
+    return lx
 
 
 class VisualBert(nn.Module):
