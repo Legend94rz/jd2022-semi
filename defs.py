@@ -95,28 +95,6 @@ def get_lxmert(pretrained="hfl/chinese-roberta-wwm-ext", nlayer=None):
     return lx
 
 
-class VisualBert(nn.Module):
-    def __init__(self, ncls=1, nlayer=None, pretrained_bert='youzanai/bert-product-title-chinese'):
-        super().__init__()
-        self.vbert = get_vbert(pretrained_bert, nlayer=nlayer)
-        self.img_prj = nn.Sequential(MoEx1d(0.1), nn.Dropout(0.1))
-        #self.img_prj = nn.Dropout(0.05)
-        #self.img_prj = MoEx1d(0.3)
-        self.cls = nn.Linear(768, ncls)
-
-    def forward(self, img, tt_id, tt_atmask):
-        img = self.img_prj(img).unsqueeze(1)
-        #img = img.unsqueeze(1)
-        o = self.vbert(
-            input_ids=tt_id, 
-            attention_mask=tt_atmask, 
-            visual_embeds=img, 
-            visual_token_type_ids=T.ones(img.shape[:-1], dtype=T.long, device=img.device),
-            visual_attention_mask=T.ones(img.shape[:-1], dtype=T.float32, device=img.device)
-        )
-        return self.cls(o.pooler_output)
-
-
 class MoEx1d(nn.Module):
     # only support LayerNorm(1d)
     def __init__(self, p):

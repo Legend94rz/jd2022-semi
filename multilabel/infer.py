@@ -27,20 +27,25 @@ import multiprocessing as mp
 import re
 from functools import partial
 import argparse
-from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter, VisualBert
+from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter
 from tools import ufset, std_obj, write_submit, get_eq_attr
+from .train import VisualBert
 seed_everything(43)
 
 
 class MultiLabelTestDataset(Dataset):
     tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
 
-    def __init__(self, objs):
+    def __init__(self, objs, additional_token=False):
         self.objs = objs
+        if additional_token:
+            self.additional_token = ''.join(f'[unused{1+i}]' for i in range(len(prop)))
+        else:
+            self.additional_token = ''
 
     def __getitem__(self, index):
         a = self.objs[index]
-        return a['feature'], a['title']
+        return a['feature'], self.additional_token + a['title']
 
     def __len__(self):
         return len(self.objs)
@@ -64,12 +69,14 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     prop = get_eq_attr()
+    MultiLabelTestDataset.tokenizer.add_special_tokens({'additional_special_tokens': [f'[unused{i+1}]' for i in range(len(prop))]})
+
     with open(args.input_file, 'r') as fin:
         online_test_obj = [json.loads(x) for x in fin.readlines()]
     samples = []
     for x in online_test_obj:
         samples.append(std_obj(x))
-    ds = MultiLabelTestDataset(samples)
+    ds = MultiLabelTestDataset(samples, True)
 
     probs = []
     # 注意文件路径。注意参数
