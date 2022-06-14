@@ -152,18 +152,6 @@ def extract_type(title):
     return tp.pop()
 
 
-def attr_to_oh(attr, prop, prop2id):
-    oh = []
-    for p in prop:
-        lst = np.zeros(len(prop[p]))
-        if p in attr:
-            i = prop2id[(p, attr[p])]
-            if 0 <= i < len(prop[p]):
-                lst[ i ] = 1
-        oh.append(lst)
-    return np.concatenate(oh)
-
-
 def is_equal(v1, v2):
     # 返回v1与v2是否是等价属性
     return ufset.get(v1) == ufset.get(v2)
@@ -190,97 +178,6 @@ def read_label_data(fine_txt, prop: Dict[str, List]) -> pd.DataFrame:
         pd.DataFrame(match, columns=['图文'])
     ], axis=1)
     return df
-
-
-def read_unlabel_data(coarse_txt, prop:  Dict[str, List[str]]) -> pd.DataFrame:
-    # 自动提取标题中相应的属性。由于有属性取值相同，会引入少量噪声。
-    # 使用这个做训练的话还要注意去掉图文不匹配的。
-    info = []
-    attr = []
-    match = []
-    with open(coarse_txt, 'r') as fin:
-        for x in fin.readlines():
-            x = json.loads(x)
-            info.append([x['img_name'], x['title'], x['feature']])
-            m = x['match']["图文"]
-            attr.append(extract_prop_from_title(x['title']))
-            match.append([m])
-            
-    df = pd.concat([
-        pd.DataFrame(info, columns=['img_name', 'title', 'feature']),
-        pd.DataFrame.from_records(attr, columns=list(prop.keys())),
-        pd.DataFrame(match, columns=['图文'])
-    ], axis=1)
-    return df
-
-
-def read_test_data(test_txt, prop: Dict[str, List[str]]) -> pd.DataFrame:
-    info = []
-    query = []
-    with open(test_txt, 'r') as fin:
-        for x in fin.readlines():
-            x = json.loads(x)
-            info.append([x['img_name'], x['title'], x['feature']])
-            query.append({k: -1 for k in x['query']})
-            
-    df = pd.concat([
-        pd.DataFrame(info, columns=['img_name', 'title', 'feature']),
-        pd.DataFrame.from_records(query, columns=list(prop.keys()) + ['图文']),
-    ], axis=1)
-    return df
-
-
-def compute_score(prop, submit, ground_truth):
-    """
-    submit: {img_name: 'xx', match: {yyy}, [additional: {zzzz}]}
-    ground_truth: {img_name, feature, title, match, key_attr, [gt_title], [gt_match], [gt_key_attr]}
-    """
-    assert len(submit) == len(ground_truth)
-    info = []
-    answer = []
-    pred_attr = []
-    gt_attr = []
-    gt_overall = []
-    allk = list(prop)
-    has_pred_attr = 'additional' in submit[0]
-
-    for i in range(len(submit)):
-        pred = submit[i]['match']
-        target = ground_truth[i]['match']
-
-        assert set(pred.keys()).issubset(set(target.keys())), f"Unmatched sample pair: {pred}, {target}"
-        info.append([ground_truth[i]['img_name'], ground_truth[i]['title'], ground_truth[i]['title'] if target['图文'] else ground_truth[i]['gt_title'] ])
-        answer.append({k: pred[k] == target[k] for k in pred})
-        gt_overall.append(target['图文'])
-        if has_pred_attr:
-            pred_attr.append(submit[i]['additional']['key_attr'])
-            gt_attr.append(ground_truth[i]['key_attr'] if target['图文'] else ground_truth[i]['gt_key_attr'])
-    flag = pd.DataFrame.from_records(answer, columns=allk + ['图文'])
-    if has_pred_attr:
-        df = pd.concat([
-            pd.DataFrame(info, columns=['img_name', 'title', 'gt_title']),
-            pd.concat([
-                flag.rename(columns={k: k+'f' for k in allk}),
-                pd.DataFrame.from_records(pred_attr, columns=allk).rename(columns={k: k+'p' for k in allk}),
-                pd.DataFrame.from_records(gt_attr, columns=allk).rename(columns={k: k+'y' for k in allk}),
-                pd.DataFrame(gt_overall, columns=['图文y'])
-            ], axis=1).sort_index(axis=1)
-        ], axis=1)
-        bad_case = df[(~pd.isna(flag)).sum(1) != flag.sum(1) ]
-    else:
-        df = pd.concat([
-            pd.DataFrame(info, columns=['img_name', 'title', 'gt_title']),
-            pd.concat([
-                flag.rename(columns={k: k+'f' for k in allk}),
-                pd.DataFrame(gt_overall, columns=['图文y'])
-            ], axis=1).sort_index(axis=1)
-        ], axis=1)
-        bad_case = df[(~pd.isna(flag)).sum(1) != flag.sum(1) ]
-    print(flag.sum() / (~pd.isna(flag)).sum()) # 单个属性的acc
-    title_score = flag['图文'].sum() / (~pd.isna(flag['图文'])).sum()
-    prop_score = flag[allk].sum().sum() / (~pd.isna(flag[allk])).sum().sum()
-    score = (title_score + prop_score) / 2
-    return score, bad_case
 
 
 def write_submit(submit_objs, filename, ignore_additional=False):

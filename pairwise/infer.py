@@ -23,8 +23,8 @@ import numpy  as np
 from transformers import AutoTokenizer, AutoModel
 import re
 import argparse
-from tools import get_all_keyattr, read_label_data, read_unlabel_data, read_test_data, ufset, write_submit, extract_prop_from_title, std_obj
-from defs import LmdbObj, MoEx1d, YZBertTextEnc
+from tools import get_all_keyattr, read_label_data, ufset, write_submit, extract_prop_from_title, std_obj
+from defs import MoEx1d, YZBertTextEnc
 from .train import TitleImg
 seed_everything(43)
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     for i, pt in enumerate(args.weight_files):
         pt = Path(pt)
         if pt.exists():
-            m = Learner(TitleImg(), amp=True).load(pt, 'cuda')
+            m = Learner(TitleImg(6), amp=True).load(pt, 'cuda')
             output = m.predict(ds, 256, device='cuda', collate_fn=PairwiseTestDataset.collate_fn)
             output = sigmoid(output).reshape(-1)
             probs.append(output)

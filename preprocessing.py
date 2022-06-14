@@ -22,6 +22,7 @@ import re
 import gc
 import multiprocessing as mp
 import argparse
+from fasttorch import LmdbDict
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # tokenizer 被 fork 的话会报 warning. todo: 探究下如何实现的
 device = 'cuda' if T.cuda.is_available() else 'cpu'
 
@@ -48,7 +49,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     PREPROCESS_OUTPUT.mkdir(exist_ok=True, parents=True)
-    prop = get_eq_attr()    # todo: 完善
+    prop = get_eq_attr()
     prop2id = OrderedDict()  # 由于不同属性下的取值可能相同，所以使用(属性名，属性取值)作为key。等价属性已经替换了。
     prop2uid = OrderedDict() # (属性名，属性取值) -> 唯一 id。等价属性已经替换了。
     for k, v in prop.items():
@@ -59,7 +60,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("youzanai/bert-product-title-chinese", local_files_only=True)
 
     all_prop = get_all_keyattr()
-    # todo: all_prop.values() 这里有重复的！！
+    # all_prop.values() 这里有重复的！！
     literals = [tokenizer.special_tokens_map['pad_token'], tokenizer.special_tokens_map['cls_token']] + list(all_prop.keys()) + list(chain.from_iterable(all_prop.values()))  # 用 pad 表示没在标题里匹配到相应属性
     literal2id = OrderedDict({k: i for i, k in enumerate(literals)})
 
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     candidate_title = [x['title'] for x in objs]
     candidate_attr = [x['key_attr'] for x in objs]
     candidate_meta = [x['meta'] for x in objs]
-    # todo: candidate_attr、candidate_title 是否应该全保存下来？对于训练集，能否用训练集之外的标题来增广？验证集呢？
+
     with open(PREPROCESS_OUTPUT / 'props.pkl', 'wb') as fout:
         pkl.dump(dict(
             prop=prop,
@@ -107,27 +108,30 @@ if __name__ == "__main__":
     print("Writing Feature DB...")
     fdb = PREPROCESS_OUTPUT / 'feature_db'
     shutil.rmtree(fdb, ignore_errors=True)
-    env = lmdb.open(str(fdb), int(1e12), max_dbs=128)
-    db = env.open_db(b'train')
+    db = LmdbDict(fdb, 'train', writeable=True)
     img_names = set()
-    with env.begin(db=db, write=True) as txn:
+    with db:
         for i, x in enumerate(tqdm(objs + unmatched, desc='img')):
             if x['img_name'] in img_names:
-                if not np.allclose(x['feature'], pkl.loads(txn.get(x['img_name'].encode()))):
+                if not np.allclose(x['feature'], db[x['img_name']]):
                     print('warning: duplicate img name but not same feature! ', x['img_name'])
             else:
-                txn.put(x['img_name'].encode(), pkl.dumps(x['feature']))
+                db[x['img_name']] = x['feature']
                 img_names.add(x['img_name'])
+    db.close()
     print('img done.')
-    db2 = env.open_db(b'gttitle')
-    with env.begin(db=db2, write=True) as txn:
+
+    db2 = LmdbDict(fdb, 'gttitle', writeable=True)
+    with db2:
         for i, x in enumerate(tqdm(objs, desc='title')):
-            txn.put(x['img_name'].encode(), pkl.dumps(x['title']))
-    db3 = env.open_db(b'gtattr')
-    with env.begin(db=db3, write=True) as txn:
+            db2[x['img_name']] = x['title']
+    db2.close()
+
+    db3 = LmdbDict(fdb, 'gtattr', writeable=True)
+    with db3:
         for i, x in enumerate(tqdm(objs, desc='attr')):
-            txn.put(x['img_name'].encode(), pkl.dumps(x['key_attr']))
-    env.close()
+            db3[x['img_name']] = x['key_attr']
+    db3.close()
 
     kf = KFold(5)
     print('Make validation set...')
@@ -140,15 +144,14 @@ if __name__ == "__main__":
     for fd, (train_idx, val_idx) in enumerate(kf.split(range(len(objs)))):
         out_file = PREPROCESS_OUTPUT / f'fold-{fd}.json'
         shutil.rmtree(out_file, ignore_errors=True)
-        env = lmdb.open(str(out_file), int(1e12), max_dbs=128)
+        val_db = LmdbDict(out_file, 'val', writeable=True)
 
-        db = env.open_db(b'val')
         if args.offline_val:
             p = mp.Pool(25)
             # 如果离线生成验证集：
             uni = set()
             res = p.imap(aug_sample, (objs[i] for _ in range(5) for i in val_idx), chunksize=10000)
-            with env.begin(db=db, write=True) as txn:
+            with val_db:
                 for i, x in enumerate(tqdm(res)):
                     # 丢弃掉过于接近的
                     if is_too_close_negtive(x):
@@ -156,7 +159,7 @@ if __name__ == "__main__":
                     h = hash_obj(x)
                     if h not in uni:
                         uni.add(h)
-                        txn.put(str(i).encode(), pkl.dumps({
+                        val_db[i] = {
                             'img_name': x['img_name'],
                             'title': x['title'],
                             'match': x['match'],
@@ -164,14 +167,14 @@ if __name__ == "__main__":
                             'gt_key_attr': x['gt_key_attr'],
                             'gt_title': x['gt_title'],
                             'meta': get_meta(x)
-                        }))
+                        }
                 # 确保原数据都保存了
-                for i, x in enumerate(val_idx):
+                for i, x in enumerate(val_idx, len(uni)):
                     x = objs[x]
                     h = hash_obj(x)
                     if h not in uni:
                         uni.add(h)
-                        txn.put(str(i).encode(), pkl.dumps({
+                        val_db[i] = {
                             'img_name': x['img_name'],
                             'title': x['title'],
                             'match': x['match'],
@@ -179,15 +182,15 @@ if __name__ == "__main__":
                             'gt_key_attr': x['key_attr'].copy(),
                             'gt_title': x['title'],
                             'meta': get_meta(x)
-                        }))
+                        }
             p.close()
             p.join()
         else:
             # 否则，线上内存不够，也采用在线增广。
-            with env.begin(db=db, write=True) as txn:
+            with val_db:
                 for i, x in enumerate(val_idx):
                     x = objs[x]
-                    txn.put(str(i).encode(), pkl.dumps({
+                    val_db[i] = {
                         'img_name': x['img_name'],
                         'title': x['title'],
                         'match': x['match'],
@@ -195,14 +198,15 @@ if __name__ == "__main__":
                         'gt_key_attr': x['key_attr'].copy(),
                         'gt_title': x['title'],
                         'meta': get_meta(x)
-                    }))
-        
+                    }
+        val_db.close()
+
         # 训练集暂时采用线上增广的方式
-        db = env.open_db(b'train')
-        with env.begin(db=db, write=True) as txn:
+        train_db = LmdbDict(out_file, 'train', writeable=True)
+        with train_db:
             for i, x in enumerate(tqdm(train_idx)):
                 x = objs[x]
-                txn.put(str(i).encode(), pkl.dumps({
+                train_db[i] = {
                     'img_name': x['img_name'],
                     'title': x['title'],
                     'match': x['match'],
@@ -210,40 +214,38 @@ if __name__ == "__main__":
                     'gt_key_attr': x['key_attr'].copy(),
                     'gt_title': x['title'],
                     'meta': get_meta(x)
-                }))
-        env.close()
+                }
+        train_db.close()
 
     print('writing unmatched data...')
     for fd, (train_idx, val_idx) in enumerate(kf.split(range(len(unmatched)))):
         out_file = PREPROCESS_OUTPUT / f'fold-{fd}.json'
-        env = lmdb.open(str(out_file), int(1e12), max_dbs=128)
-
-        db = env.open_db(b'unmatched_train')
-        with env.begin(db=db, write=True) as txn:
+        unmatched_train = LmdbDict(out_file, 'unmatched_train', writeable=True)
+        with unmatched_train:
             for i, x in enumerate(tqdm(train_idx)):
                 x = unmatched[x]
-                txn.put(str(i).encode(), pkl.dumps({
+                unmatched_train[i] = {
                     'img_name': x['img_name'],
                     'title': x['title']
-                }))
+                }
+        unmatched_train.close()
 
-        db = env.open_db(b'unmatched_val')
-        with env.begin(db=db, write=True) as txn:
+        unmatched_val = LmdbDict(out_file, 'unmatched_val', writeable=True)
+        with unmatched_val:
             for i, x in enumerate(tqdm(val_idx)):
                 x = unmatched[x]
-                txn.put(str(i).encode(), pkl.dumps({
+                unmatched_val[i] = {
                     'img_name': x['img_name'],
                     'title': x['title']
-                }))
-        env.close()
+                }
+        unmatched_val.close()
 
     print('writing full matched data (not split)...')
     out_file = PREPROCESS_OUTPUT / f'full.json'
-    env = lmdb.open(str(out_file), int(1e12), max_dbs=128)
-    db = env.open_db(b'train')
-    with env.begin(db=db, write=True) as txn:
+    full_train = LmdbDict(out_file, 'train', writeable=True)
+    with full_train:
         for i, x in enumerate(tqdm(objs)):
-            txn.put(str(i).encode(), pkl.dumps({
+            full_train[i] = {
                 'img_name': x['img_name'],
                 'title': x['title'],
                 'match': x['match'],
@@ -251,11 +253,14 @@ if __name__ == "__main__":
                 'gt_key_attr': x['key_attr'].copy(),
                 'gt_title': x['title'],
                 'meta': get_meta(x)
-            }))
-    db = env.open_db(b'unmatched')
-    with env.begin(db=db, write=True) as txn:
+            }
+    full_train.close()
+
+    unmatched = LmdbDict(out_file, 'unmatched', writeable=True)
+    with unmatched:
         for i, x in enumerate(tqdm(unmatched)):
-            txn.put(str(i).encode(), pkl.dumps({
+            unmatched[i] = {
                 'img_name': x['img_name'],
                 'title': x['title'],
-            }))
+            }
+    unmatched.close()

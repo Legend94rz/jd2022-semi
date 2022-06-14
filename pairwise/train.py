@@ -8,7 +8,7 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, ConcatDataset
-from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts, ReduceLROnPlateau, LmdbDict
 from fasttorch.metrics.metrics import BaseMeter
 from fasttorch.misc.misc import seed_everything
 from tqdm import tqdm
@@ -26,7 +26,7 @@ from transformers import AutoTokenizer, AutoModel
 import multiprocessing as mp
 import re
 from functools import partial
-from defs import LmdbObj, MoEx1d, PrjImg
+from defs import MoEx1d
 from tools import ufset
 seed_everything(43)
 
@@ -156,31 +156,31 @@ def neg_aug(obj, all_prop, ufset, table: pd.DataFrame, grouped_df: pd.DataFrame)
 
 
 def train_pairwise(fd):
-    feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
+    feature_db = LmdbDict(PREPROCESS_MOUNT / 'feature_db', 'train', lock=False)
 
-    train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
-    unmatched_train = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train')
+    train_obj = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train', lock=False)
+    unmatched_train = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_train', lock=False)
     samples = []
-    for x in tqdm(train_obj):
+    for x in tqdm(train_obj.values()):
         samples.extend(make_sample(x, prop, ufset))
         samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
         samples.extend(pos_aug(x, ufset))
-    for x in tqdm(unmatched_train):
+    for x in tqdm(unmatched_train.values()):
         samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
     print(sum([x['match'] for x in samples]), len(samples))
     
     val_samples = []
     unique = set()
-    val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
-    unmatched_val = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val')
-    for x in tqdm(val_obj):
+    val_obj = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val', lock=False)
+    unmatched_val = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'unmatched_val', lock=False)
+    for x in tqdm(val_obj.values()):
         if x['img_name'] not in unique:
             x = {'img_name': x['img_name'], 'key_attr': x['gt_key_attr'], 'match': {**{'图文': 1}, **{k:1 for k in x['gt_key_attr']}}, 'title': x['gt_title'], 'gt_key_attr': x['gt_key_attr'].copy()}
             val_samples.extend(make_sample(x, prop, ufset))
             val_samples.extend(neg_aug(x, prop, ufset, table, grouped_df))
             val_samples.extend(pos_aug(x, ufset))
             unique.add(x['img_name'])
-    for x in tqdm(unmatched_val):
+    for x in tqdm(unmatched_val.values()):
         val_samples.append({'img_name': x['img_name'], 'txt': x['title'], 'match': 0})
     print(sum([x['match'] for x in val_samples]), len(val_samples))
 

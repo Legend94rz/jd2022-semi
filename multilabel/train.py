@@ -8,7 +8,7 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, ConcatDataset
-from fasttorch import T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from fasttorch import LmdbDict, T, nn, F, Learner, SparseCategoricalAccuracy, StochasticWeightAveraging, EarlyStopping, ModelCheckpoint, F1Score, BinaryAccuracyWithLogits, TorchProfile, Stage, LambdaLayer, CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from fasttorch.metrics.metrics import BaseMeter
 from fasttorch.misc.misc import seed_everything
 from tqdm import tqdm
@@ -26,7 +26,7 @@ from transformers import AutoTokenizer, AutoModel
 import multiprocessing as mp
 import re
 from functools import partial
-from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter, VisualBert, random_delete, random_modify, random_replace, mutex_transform, sequential_transform, delete_words, replace_hidden, shuffle_title
+from defs import LmdbObj, MoEx1d, OnlineMeter, VisualBert, random_delete, random_modify, random_replace, mutex_transform, sequential_transform, delete_words, replace_hidden, shuffle_title
 from tools import ufset, extract_color, extract_type, is_too_close_negtive
 seed_everything(43)
 BERT = 'youzanai/bert-product-title-chinese'
@@ -92,28 +92,24 @@ class MultiLabelLearner(Learner):
 
 
 def train_multilabel(fd):
-    feature_db = LmdbObj(PREPROCESS_MOUNT / 'feature_db', 'train')
-    train_obj = LmdbObj(PREPROCESS_MOUNT / f'full.json', 'train')
-    #train_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train')
-    #val_obj = LmdbObj(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val')
+    feature_db = LmdbDict(PREPROCESS_MOUNT / 'feature_db', 'train', lock=False)
+    train_obj = LmdbDict(PREPROCESS_MOUNT / f'full.json', 'train', lock=False)
+    #train_obj = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'train', lock=False)
+    #val_obj = LmdbDict(PREPROCESS_MOUNT / f'fold-{fd}.json', 'val', lock=False)
     EPOCHS = 26
 
-    # todo: 新开一个mutex trans: 删除词语；替换中心词；只有中心词；只有属性词
-    # delete_words: 对正样本增广，保持为正
-    # replace_hidden: 正样本增广为负样本。替换类型、颜色或性别
-    # todo: lr/swa参数
     trans = mutex_transform([
         sequential_transform([
-            random_replace(candidate_attr, candidate_title),
-            random_delete(0.3),
-            random_modify(0.3, prop)
+            random_replace(candidate_attr, candidate_title),  # 随机替换一个标题
+            random_delete(0.3), # 随机删除一个属性
+            random_modify(0.3, prop) # 随机修改一个属性
         ], [0.5, 0.4, 0.5]),
         mutex_transform([
             delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
             replace_hidden(rep_color=False, rep_tp=True),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
             sequential_transform([
-                delete_words(), # 分词后随机选择至少一个短语，删除。相应修改 match 的字段。
-                replace_hidden(rep_color=False, rep_tp=True),  # 随机换类型、颜色或性别中的至少一个，没有这些则保持原输入。
+                delete_words(),
+                replace_hidden(rep_color=False, rep_tp=True),
             ], [1., 1.])
         ], [0.33, 0.33, 0.34]),
         lambda x: x

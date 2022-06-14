@@ -20,8 +20,6 @@ if ONLINE:
     sys.path.append(str((INPUT_DATA / 'trex2485/trexpark').resolve()))
     sys.path.append(str((PROJECT / 'code').resolve()))
     os.environ['TRANSFORMERS_CACHE'] = str((INPUT_DATA / 'hfcache4484/cache').resolve())
-    # todo: 这样每次运行都会安装一遍。
-    #os.system("pip install -U /home/mw/project/Fasttorch-1.0.9-py3-none-any.whl")
 else:
     r = Path('/home/renzhen/.jupyter/kaggle/jd2022-semi/')
     WORK_DATA = r / 'work'

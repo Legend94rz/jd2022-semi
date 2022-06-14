@@ -27,7 +27,7 @@ import multiprocessing as mp
 import re
 from functools import partial
 import argparse
-from defs import LmdbObj, MoEx1d, PrjImg, OnlineMeter, VisualBert
+from defs import MoEx1d, OnlineMeter, VisualBert
 from tools import ufset, std_obj, write_submit, get_eq_attr
 seed_everything(43)
 
